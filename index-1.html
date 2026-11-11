@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1b2d">
+<title>Assistant code</title>
+<style>
+:root{--bg:#0f1b2d;--panel:#182841;--ink:#e8eef7;--mute:#8da2bf;--acc:#ffcb47;--code:#0a1424}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;display:flex;flex-direction:column;height:100dvh;padding-top:env(safe-area-inset-top)}
+header{padding:14px 16px 8px}
+h1{margin:0;font-size:20px}
+#st{margin:2px 0 0;color:var(--mute);font-size:13px}
+#log{flex:1;overflow-y:auto;padding:8px 16px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:100%;padding:12px 14px;border-radius:14px;background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}
+.me{align-self:flex-end;background:var(--acc);color:#1a1405;max-width:85%}
+.msg h2{margin:0 0 6px;font-size:16px}
+pre{background:var(--code);border-radius:8px;padding:10px;overflow-x:auto;margin:8px 0;white-space:pre}
+code{font:14px ui-monospace,monospace}
+.msg code{background:var(--code);padding:1px 5px;border-radius:4px}
+pre code{padding:0;background:none}
+details{margin-top:10px;border-top:1px solid #2a3d5c;padding-top:8px}
+summary{cursor:pointer;color:var(--acc)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chips button{background:transparent;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:6px 12px;font:14px system-ui}
+form{display:flex;gap:8px;padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+input{flex:1;min-width:0;border:1px solid #2a3d5c;background:var(--panel);color:var(--ink);border-radius:12px;padding:12px;font:16px system-ui}
+form button{border:0;background:var(--acc);color:#1a1405;border-radius:12px;padding:0 18px;font:600 16px system-ui}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Assistant code</h1>
+  <p id="st">Chargement des connaissances…</p>
+</header>
+<main id="log" aria-live="polite"></main>
+<form id="f">
+  <input id="q" placeholder="Pose une question de code" autocomplete="off" aria-label="Ta question">
+  <button type="submit">Envoyer</button>
+</form>
+<script>
+// Ajoute ici d’autres fichiers de connaissances (chacun doit rester sous 100 Mo).
+const SOURCES = ['knowledge.json'];
+
+const STOP = new Set('le la les de des du un une et en que qui pour dans sur au aux est ce ca comment faire quoi a l d je tu il on y ou par avec sans mon ma mes ton the of to in is'.split(' '));
+const norm = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const tok = s => (norm(s).match(/[a-z0-9_]+/g) || []).filter(w => !STOP.has(w));
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+let docs = [];
+const inv = new Map();
+const log = document.getElementById('log');
+const st = document.getElementById('st');
+
+function build() {
+  docs.forEach((d, i) => {
+    const add = (txt, w) => {
+      for (const t of tok(txt)) {
+        let m = inv.get(t);
+        if (!m) { m = new Map(); inv.set(t, m); }
+        m.set(i, (m.get(i) || 0) + w);
+      }
+    };
+    add(d.t, 5); add(d.k || '', 3); add(d.c, 1);
+  });
+}
+
+function search(q) {
+  const N = docs.length, sc = new Map();
+  for (const w of tok(q)) {
+    for (const [term, m] of inv) {
+      const f = term === w ? 1 : (w.length >= 3 && term.startsWith(w) ? 0.5 : 0);
+      if (!f) continue;
+      const idf = Math.log(1 + N / (1 + m.size));
+      for (const [i, tf] of m) sc.set(i, (sc.get(i) || 0) + f * idf * Math.log(1 + tf));
+    }
+  }
+  return [...sc].sort((a, b) => b[1] - a[1]).slice(0, 5).map(x => docs[x[0]]);
+}
+
+function render(s) {
+  s = esc(s);
+  s = s.replace(/```\w*\n([\s\S]*?)```/g, (m, c) => '<pre><code>' + c + '</code></pre>');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  return s.replace(/\n(<pre>)/g, '$1').replace(/(<\/pre>)\n/g, '$1');
+}
+
+function add(html, cls) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + (cls || '');
+  d.innerHTML = html;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+function ask(q) {
+  q = q.trim();
+  if (!q) return;
+  add(esc(q), 'me');
+  const r = search(q);
+  if (!r.length) {
+    add('Je n’ai rien trouvé. Essaie avec d’autres mots-clés, ou ajoute cette fiche dans knowledge.json.');
+    return;
+  }
+  let h = '<h2>' + esc(r[0].t) + '</h2>' + render(r[0].c);
+  r.slice(1).forEach(d => {
+    h += '<details><summary>' + esc(d.t) + '</summary>' + render(d.c) + '</details>';
+  });
+  add(h);
+}
+
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const q = document.getElementById('q');
+  ask(q.value);
+  q.value = '';
+});
+
+async function load() {
+  let bytes = 0;
+  try {
+    for (const src of SOURCES) {
+      const txt = await (await fetch(src)).text();
+      bytes += new Blob([txt]).size;
+      docs = docs.concat(JSON.parse(txt));
+    }
+    build();
+    st.textContent = docs.length + ' fiches · ' + (bytes / 1048576).toFixed(2).replace('.', ',') + ' Mo';
+    const m = add('Pose une question sur HTML, CSS, JavaScript, Python, Git ou GitHub Pages.');
+    const c = document.createElement('div');
+    c.className = 'chips';
+    ['centrer avec flexbox', 'boucle en Python', 'publier sur GitHub Pages'].forEach(t => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = t;
+      b.onclick = () => ask(t);
+      c.appendChild(b);
+    });
+    m.appendChild(c);
+  } catch (e) {
+    st.textContent = 'Erreur de chargement';
+    add('Impossible de lire les fichiers de connaissances. Vérifie que knowledge.json est bien dans le dépôt, à côté de index.html.');
+  }
+}
+load();
+</script>
+</body>
+</html>
